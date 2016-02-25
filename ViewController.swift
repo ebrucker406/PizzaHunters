@@ -20,6 +20,22 @@ class ViewController: UIViewController, CLLocationManagerDelegate, MKMapViewDele
     var currentLocation :CLLocation?
     var geocoder :CLGeocoder = CLGeocoder()
     
+    var cityList : [String] = []
+    
+    public let coordinates: [CLLocationCoordinate2D]?
+    /// The encoded polyline
+    public let encodedPolyline: String
+    
+    /// The array of levels (nil if cannot be decoded, or is not provided)
+    public let levels: [UInt32]?
+    /// The encoded levels (nil if cannot be encoded, or is not provided)
+    public let encodedLevels: String?
+    
+    /// The array of location (computed from coordinates)
+    public var locations: [CLLocation]? {
+        return self.coordinates.map(toLocations)
+    }
+    
     override func viewDidLoad() {
         
         super.viewDidLoad()
@@ -94,6 +110,15 @@ class ViewController: UIViewController, CLLocationManagerDelegate, MKMapViewDele
                 }
                 
                 self.mapView!.addOverlay((route?.polyline)!, level: MKOverlayLevel.AboveRoads)
+                var cities :Int = 0
+                
+                for var pointCount = 0; pointCount <= route?.polyline.pointCount; ++pointCount{
+                    
+                    print("Test")
+                    self.cityList[cities] = self.searchCity((route?.polyline.coordinate.latitude)!, longitude: (route?.polyline.coordinate.longitude)!)
+                    cities++
+                    
+                }
             })
             
             
@@ -104,9 +129,98 @@ class ViewController: UIViewController, CLLocationManagerDelegate, MKMapViewDele
 //            let success = MKMapItem.openMapsWithItems(mapItems, launchOptions: launchOptions)
             
         })
+    }
+    
+    public func decodePolyline(encodedPolyline :String, precision: Double = 1e5)->[CLLocationCoordinate2D]{
+        let data = encodedPolyline.dataUsingEncoding(NSUTF8StringEncoding)!
         
+        let byteArray = unsafeBitCast(data.bytes, UnsafePointer<Int8>.self)
+        let length = Int(data.length)
+        var position = Int(0)
+        
+        var decodedCoordinates = [CLLocationCoordinate2D]()
+        
+        var lat = 0.0
+        var lon = 0.0
+        
+        while position < length{
+            do {
+                let resultingLat = try decodeSingleCoordinate(byteArray: byteArray, length: length, position: &position, precision: precision)
+                lat += resultingLat
+                
+                let resultingLon = try decodeSingleCoordinate(byteArray: byteArray, length: length, position: &position, precision: precision)
+                lon += resultingLon
+            } catch {
+                //return nil
+                print("Error")
+            }
+            decodedCoordinates.append(CLLocationCoordinate2D(latitude: lat, longitude: lon))
+        }
+        return decodedCoordinates
+        
+    }
     
+    public func decodePolyline(encodedPolyline: String, precision: Double = 1e5) -> [CLLocation]? {
+        
+        return decodePolyline(encodedPolyline, precision: precision).map(toLocations)
+    }
     
+    private func decodeSingleCoordinate(byteArray byteArray: UnsafePointer<Int8>, length: Int, inout position: Int, precision: Double = 1e5) throws -> Double {
+        
+        guard position < length else { throw PolylineError.SingleCoordinateDecodingError }
+        
+        let bitMask = Int8(0x1F)
+        
+        var coordinate: Int32 = 0
+        
+        var currentChar: Int8
+        var componentCounter: Int32 = 0
+        var component: Int32 = 0
+        
+        repeat {
+            currentChar = byteArray[position] - 63
+            component = Int32(currentChar & bitMask)
+            coordinate |= (component << (5*componentCounter))
+            position++
+            componentCounter++
+        } while ((currentChar & 0x20) == 0x20) && (position < length) && (componentCounter < 6)
+        
+        if (componentCounter == 6) && ((currentChar & 0x20) == 0x20) {
+            throw PolylineError.SingleCoordinateDecodingError
+        }
+        
+        if (coordinate & 0x01) == 0x01 {
+            coordinate = ~(coordinate >> 1)
+        } else {
+            coordinate = coordinate >> 1
+        }
+        
+        return Double(coordinate) / precision
+    }
+    
+    func searchCity(latitude :Double, longitude :Double) -> String{
+        var city :String = ""
+        
+        var localGeoCoder :CLGeocoder = CLGeocoder()
+        let location = CLLocation(latitude: latitude, longitude: longitude)
+        localGeoCoder.reverseGeocodeLocation(location){
+            (placemarks, error) -> Void in
+            let placeArray  = placemarks as [CLPlacemark]!
+            
+            var placeMark: CLPlacemark!
+            placeMark = placeArray?[0]
+            
+            print(placeMark.addressDictionary)
+            let locationName = placeMark.addressDictionary?["Name"] as? String
+            print(locationName)
+            city = locationName!
+            print("testing123")
+            print(city)
+            
+        }
+        print(city)
+        
+        return city
     }
     
     func dropFavoriteAnnotation() {
@@ -244,6 +358,27 @@ class ViewController: UIViewController, CLLocationManagerDelegate, MKMapViewDele
     }
 
 }
+
+enum PolylineError: ErrorType {
+    case SingleCoordinateDecodingError
+    case ChunkExtractingError
+}
+
+private func toCoordinates(locations: [CLLocation]) -> [CLLocationCoordinate2D] {
+    return locations.map {location in location.coordinate}
+}
+
+private func toLocations(coordinates: [CLLocationCoordinate2D]) -> [CLLocation] {
+    return coordinates.map { coordinate in
+        CLLocation(latitude:coordinate.latitude, longitude:coordinate.longitude)
+    }
+}
+
+private func isSeparator(value: Int32) -> Bool {
+    return (value - 63) & 0x20 != 0x20
+}
+
+private typealias IntegerCoordinates = (latitude: Int, longitude: Int)
 
 
 
